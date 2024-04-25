@@ -1,29 +1,26 @@
 package com.example.routes
 
-import com.auth0.jwt.JWT
-import com.auth0.jwt.algorithms.Algorithm
 import com.example.data.Users
 import com.example.models.User
 import com.example.models.UserRegistrationForm
 import com.example.repository.UserSessionRepository
 import com.example.util.LongTokenGenerator
-import io.jsonwebtoken.Jwts
-import io.jsonwebtoken.SignatureAlgorithm
-import io.jsonwebtoken.security.Keys
 import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.auth.*
+import io.ktor.server.auth.jwt.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import org.jetbrains.exposed.sql.insert
 import org.jetbrains.exposed.sql.select
 import org.jetbrains.exposed.sql.transactions.transaction
-import org.jetbrains.exposed.sql.update
 import java.security.MessageDigest
-import java.util.*
 import kotlin.random.Random
 
 fun Route.register() {
@@ -40,8 +37,8 @@ fun Route.register() {
             // Genera el hash de la contraseña
             val hashedPassword = hashPassword(email, password, salt)
 
-            val user = User(email, hashedPassword, salt, null)
-            val token = generateToken(user)
+            //val user = User(email, hashedPassword, salt, null)
+            //val token = generateToken(user)
 
             // Verificar si el usuario ya existe
             if (transaction { Users.select { Users.email eq email }.count() > 0 }) {
@@ -65,10 +62,15 @@ fun Route.register() {
         }
 
     }
+
     post("/auth/login") {
         val parameters = call.receiveParameters()
-        val email = parameters["email"] ?: return@post call.respondText("Missing email", status = HttpStatusCode.BadRequest)
-        val password = parameters["password"] ?: return@post call.respondText("Missing password", status = HttpStatusCode.BadRequest)
+        val email =
+            parameters["email"] ?: return@post call.respondText("Missing email", status = HttpStatusCode.BadRequest)
+        val password = parameters["password"] ?: return@post call.respondText(
+            "Missing password",
+            status = HttpStatusCode.BadRequest
+        )
 
         val userRow = transaction { Users.select { Users.email eq email }.singleOrNull() }
 
@@ -94,42 +96,14 @@ fun Route.register() {
             }
         }
     }
-    post("/auth/token") {
-        val parameters = call.receiveParameters()
-        val sessionId = parameters["sessionId"]?.toIntOrNull()
-        val tokenLong = parameters["tokenLong"]
-
-        if (sessionId == null || tokenLong == null) {
-            call.respondText("Missing session ID or long token", status = HttpStatusCode.BadRequest)
-            return@post
-        }
-
-        // Verificar si la sesión existe en la base de datos
-        val session = UserSessionRepository.getSessionById(sessionId)
-        if (session == null || session.token != tokenLong) {
-            call.respondText("Invalid session ID or long token", status = HttpStatusCode.BadRequest)
-            return@post
-        }
-
-        // Obtener el email del usuario para generar el token corto (JWT)
-        val userRow = transaction { Users.select { Users.id eq session.userId }.singleOrNull() }
-        if (userRow == null) {
-            call.respondText("User not found", status = HttpStatusCode.BadRequest)
-            return@post
-        }
-        val userEmail = userRow[Users.email]
-
-        // Generar token corto (JWT)
-        val user = User(userEmail, "", "", "") // Crear un objeto usuario con el email
-        val jwtToken = generateToken(user)
-
-        call.respondText("Short token (JWT) generated successfully: $jwtToken")
-    }
 
 
     authenticate("jwt") {
         get("/auth/protected") {
-            call.respondText("Hello, ${call.principal<UserIdPrincipal>()?.name}")
+            val principal = call.principal<JWTPrincipal>()
+            val username = principal!!.payload.getClaim("email").asString()
+            val expiresAt = principal.expiresAt?.time?.minus(System.currentTimeMillis())
+            call.respondText("Hello, $username! Token is expired at $expiresAt ms.")
         }
     }
 
@@ -162,6 +136,41 @@ fun Route.register() {
             call.respondText("Failed to logout", status = HttpStatusCode.InternalServerError)
         }
     }
+
+    post("/auth/token") {
+        val parameters = call.receiveParameters()
+        val sessionId = parameters["sessionId"]?.toIntOrNull()
+        val tokenLong = parameters["tokenLong"]
+
+        if (sessionId == null || tokenLong == null) {
+            call.respond(HttpStatusCode.BadRequest, "Missing session ID or long token")
+            return@post
+        }
+
+        // Verificar si la sesión existe en la base de datos
+        val session = UserSessionRepository.getSessionById(sessionId)
+        if (session == null || session.token != tokenLong) {
+            call.respond(HttpStatusCode.BadRequest, "Invalid session ID or long token")
+            return@post
+        }
+        // Obtener el email del usuario para generar el token corto (JWT)
+        val userRow = transaction { Users.select { Users.id eq session.userId }.singleOrNull() }
+        if (userRow == null) {
+            call.respond(HttpStatusCode.BadRequest, "User not found")
+            return@post
+        }
+        val userEmail = userRow[Users.email]
+
+        // Crear el token JWT
+        val token = JwtUtils.generateAccessToken(userEmail)
+
+        // Responder con el token generado
+        val jsonResponse = buildJsonObject {
+            put("token", token)
+        }
+        val jsonString = Json.encodeToString(JsonObject.serializer(), jsonResponse)
+        call.respondText(jsonString, ContentType.Application.Json, HttpStatusCode.OK)
+    }
 }
 private fun generateSalt(): String {
     val salt = ByteArray(16)
@@ -176,18 +185,5 @@ fun hashPassword(email: String, password: String, salt: String): String {
     return md.digest(password.toByteArray()).joinToString("") { "%02x".format(it) }
 }
 
-fun generateToken(user: User): String {
-    val secret = "my_secret_key" // Clave secreta para firmar el token
-    val issuer = "Ktor Server" // Emisor del token
 
-    val algorithm = Algorithm.HMAC256(secret)
-    //val expirationTimeMillis = 24 * 60 * 60 * 1000 // Tiempo de expiración del token en milisegundos (aquí, 1 día)
 
-    val expirationTimeMinutes = 1
-    val expirationTimeMillis = expirationTimeMinutes * 60 * 1000 // Convertir minutos a milisegundos
-    return JWT.create()
-        .withSubject(user.email)
-        .withExpiresAt(Date(System.currentTimeMillis() + expirationTimeMillis))
-        .withIssuer(issuer)
-        .sign(algorithm)
-}
