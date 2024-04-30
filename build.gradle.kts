@@ -47,5 +47,10 @@ dependencies {
     implementation("io.ktor:ktor-server-auth:$ktor_version")
     implementation("io.ktor:ktor-server-auth-jwt:$ktor_version")
 
+    // Dependencia de JavaMail
+    implementation("com.sun.mail:javax.mail:1.6.2")
+
+
+
 
 }

@@ -1,12 +1,13 @@
 package com.example.util
 
+import io.ktor.http.*
 import java.security.SecureRandom
 
 object LongTokenGenerator {
     private const val CHAR_LOWER = "abcdefghijklmnopqrstuvwxyz"
     private val CHAR_UPPER = CHAR_LOWER.toUpperCase()
     private const val NUMBER = "0123456789"
-    private const val OTHER_CHAR = "!@#\$%&*()_+-=[]?"
+    private const val OTHER_CHAR = "!#*()_+-="
 
     private val SECURE_RANDOM = SecureRandom()
 
