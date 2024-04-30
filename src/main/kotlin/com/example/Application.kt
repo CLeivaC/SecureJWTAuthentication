@@ -1,5 +1,6 @@
 package com.example
 import com.auth0.jwt.exceptions.JWTVerificationException
+import com.example.data.ChallengerDAO
 import com.example.data.Users
 import com.example.models.User
 import com.example.plugins.configureRouting
@@ -12,16 +13,22 @@ import io.ktor.server.auth.jwt.*
 import io.ktor.server.config.*
 import io.ktor.server.engine.*
 import io.ktor.server.netty.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 import org.jetbrains.exposed.sql.Database
 import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.transactions.transaction
+import java.util.concurrent.TimeUnit
 
 fun main() {
     val server = embeddedServer(Netty, port = 8080) {
         module()
     }
     server.start(wait = true)
+
 }
 
 fun Application.module() {
@@ -51,6 +58,8 @@ fun Application.module() {
     configureSecurity()
     configureSerialization()
     configureRouting()
+    startTokenCleanupService()
+
 }
 
 fun isValidUser(email: String): User? {
@@ -71,6 +80,19 @@ private fun databaseConexion() {
     val password = "admin"
 
     Database.connect(dbUrl, driver, user, password)
+}
+
+fun startTokenCleanupService() {
+    // Utilizar un CoroutineScope para gestionar la tarea de limpieza
+    val scope = CoroutineScope(Dispatchers.Default)
+
+    // Ejecutar la limpieza de tokens en un bucle infinito con un intervalo de 5 minutos
+    scope.launch {
+        while (true) {
+            ChallengerDAO.deleteExpiredTokens()
+            delay(TimeUnit.MINUTES.toMillis(5)) // Esperar 5 minutos antes de la próxima ejecución
+        }
+    }
 }
 
 object JwtInfo {
